@@ -1,7 +1,7 @@
 ﻿
 #Requires AutoHotkey v2.0
 #SingleInstance force
-#Include "shinsoverlayclass.ahk"
+#Include "../shinsoverlayclass.ahk"
 
 A_TickCount_Start := A_TickCount
 TickCount_Pause := 0
