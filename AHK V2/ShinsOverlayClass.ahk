@@ -389,7 +389,11 @@ class ShinsOverlayClass {
 	;extraOptions		:				Additonal options which may contain any of the following seperated by spaces:
 	;									Width .............	w[number]				: Example > w200			(Default: this.width)
 	;									Height ............	h[number]				: Example > h200			(Default: this.height)
+	;                 Weight ............ b[number]       : Example > b800      (Default: 400)
+	;                 Style ............. s[Italic/Oblique]     : Example > sItalic     (Default: normal)
 	;									Alignment ......... a[Left/Right/Center]	: Example > aCenter			(Default: Left)
+	;                           ......... a[Near/Far/Mid]    : Example > aNear       (Default: Far)
+	;                 WordWrapping ...... ww[number]        : Example > ww0           (Default: 0) (0 wrap, 1 nowrap, and more https://learn.microsoft.com/en-us/windows/win32/api/dwrite/ne-dwrite-dwrite_word_wrapping
 	;									DropShadow ........	ds[hex color]			: Example > dsFF000000		(Default: DISABLED)
 	;									DropShadowXOffset . dsx[number]				: Example > dsx2			(Default: 1)
 	;									DropShadowYOffset . dsy[number]				: Example > dsy2			(Default: 1)
@@ -398,14 +402,11 @@ class ShinsOverlayClass {
 	;return				;				Void
 	
 	DrawText(text,x,y,size:=18,color:=0xFFFFFFFF,fontName:="Arial",extraOptions:="") {
-		local w,h,p,ds,dsx,dsy,ol
+		local p,ds,dsx,dsy,ol
+		p := this._CreateTextFormat(fontName, size, extraOptions)
 		w := (RegExMatch(extraOptions,"w([\d\.]+)",&w) ? w[1] : this.width)
 		h := (RegExMatch(extraOptions,"h([\d\.]+)",&h) ? h[1] : this.height)
-		
-		p := (this.fonts.Has(fontName size) ? this.fonts[fontName size] : this.CacheFont(fontName,size))
-		
-		DllCall(this.vTable(p,3),"ptr",p,"uint",(InStr(extraOptions,"aRight") ? 1 : InStr(extraOptions,"aCenter") ? 2 : 0))
-		
+
 		if (RegExMatch(extraOptions,"ds([a-fA-F\d]+)",&ds)) {
 			dsx := (RegExMatch(extraOptions,"dsx([\d\.]+)",&dsx) ? dsx[1] : 1)
 			dsy := (RegExMatch(extraOptions,"dsy([\d\.]+)",&dsy) ? dsy[1] : 1)
@@ -413,7 +414,7 @@ class ShinsOverlayClass {
 		} else if (RegExMatch(extraOptions,"ol([a-fA-F\d]+)",&ol)) {
 			this.DrawTextOutline(p,text,x,y,w,h,"0x" ol[1])
 		}
-		
+
 		this.SetBrushColor(color)
 		bf := Buffer(64)
 		NumPut("float", x, bf, 0)
@@ -422,6 +423,97 @@ class ShinsOverlayClass {
 		NumPut("float", y+h, bf, 12)
 		
 		DllCall(this._DrawText,"ptr",this.renderTarget,"wstr",text,"uint",strlen(text),"ptr",p,"ptr",bf,"ptr",this.brush,"uint",0,"uint",0)
+	}
+	
+	; internal function
+	_CreateTextFormat(fontName, size, options) {
+		local p,s,cacheKey,b,ww
+		b := (RegExMatch(options,"b([\d]+)",&b) ? b[1] : 400)
+		s := (RegExMatch(options,"i)s(Italic|Oblique)\b", &s)) ? (s[1] = 'Italic' ? 2 : 1) : 0
+		cacheKey := fontName size b s
+		p := (this.fonts.Has(cacheKey) ? this.fonts[cacheKey] : this.CacheFont(fontName,size,b,s,cacheKey))
+		
+		DllCall(this.vTable(p,3),"ptr",p,"uint",(InStr(options,"aRight") ? 1 : InStr(options,"aCenter") ? 2 : 0))
+		DllCall(this.vTable(p,4),"ptr",p,"uint",(InStr(options,"aFar") ? 1 : InStr(options,"aMid") ? 2 : 0))
+		if RegExMatch(options,"ww([\d])",&ww)
+		  DllCall(this.vTable(p,5),"ptr",p, 'uint', ww[1])  ; word wrapping
+		return p
+	}
+
+  ;DrawTextLayout
+	; https://learn.microsoft.com/en-us/windows/win32/api/d2d1/nf-d2d1-id2d1rendertarget-drawtextlayout
+	;text          :  The text to be drawn
+	;x             :  X position
+	;y             :  Y position
+	;w             :  Width
+	;h             :  Height
+	;size          :  Size of font
+	;color         :  Color of font
+	;fontName      :  Font name (must be installed)
+	;extraOptions  :  Additonal options which may contain any of the following seperated by spaces:
+	;                 Weight ............ b[number]       : Example > b800      (Default: 400)
+	;                 Style ............. s[Italic/Oblique]     : Example > sItalic     (Default: normal)
+	;                 Alignment H ....... a[Left/Right/Center]	: Example > aCenter			(Default: Left)
+	;                           V ....... a[Near/Far/Center]    : Example > aNear       (Default: Far)
+	;                 WordWrapping ...... ww[number]      : Example > ww0           (Default: 0) (0 wrap, 1 nowrap, and more https://learn.microsoft.com/en-us/windows/win32/api/dwrite/ne-dwrite-dwrite_word_wrapping
+	;                 DropShadow ........	ds[hex color]	: Example > dsFF000000		(Default: DISABLED)
+	;                 DropShadowXOffset . dsx[number]		: Example > dsx2			(Default: 1)
+	;                 DropShadowYOffset . dsy[number]		: Example > dsy2			(Default: 1)
+	;                 Outline ........... ol[hex color]	: Example > olFF000000		(Default: DISABLED)
+	;
+	;return   ;	      Void
+
+	DrawTextLayout(text,x,y,w,h,size:=18,color:=0xFFFFFFFF,fontName:="Arial", layout:= unset) {
+		extraOptions := IsSet(layout) ? layout.options : ''
+		p := this._CreateTextFormat(fontName, size, extraOptions)
+		this.SetBrushColor(color)
+
+		local textLayout := 0
+
+		; https://learn.microsoft.com/en-us/windows/win32/api/dwrite/nf-dwrite-idwritefactory-createtextlayout
+		if (DllCall(this.vTable(this.wFactory,18),"ptr",this.wFactory,"wstr",text,"uint",StrLen(text), "ptr", p,'float',w,'float', h,"Ptr*",&textLayout) != 0) {
+			this.Err("Unable to create textlayout:" fontName)
+			return 0
+		}
+
+		if IsSet(layout) { ; apply layout
+		  ; https://learn.microsoft.com/en-us/windows/win32/api/dwrite/nn-dwrite-idwritetextlayout
+			local len := StrLen(text)
+			for v in layout.format.weight {
+				i := v[1]
+				range := Buffer(16), NumPut('uint', v[2], range, 0), NumPut('uint', v[3] = -1 ? len : v[3], range, 4)
+				DllCall(this.vTable(textLayout,27+5),'ptr',textLayout, 'uint', i, 'double',NumGet(range, 0, 'double'))
+			}
+			for v in layout.format.style {
+				i := v[1]
+				range := Buffer(16), NumPut('uint', v[2], range, 0), NumPut('uint', v[3] = -1 ? len : v[3], range, 4)
+				DllCall(this.vTable(textLayout,27+6),'ptr',textLayout, 'uint', i , 'double',NumGet(range, 0, 'double'))
+			}
+			for v in layout.format.size {
+				i := v[1]
+				range := Buffer(16), NumPut('uint', v[2], range, 0), NumPut('uint', v[3] = -1 ? len : v[3], range, 4)   
+				DllCall(this.vTable(textLayout,27+8),'ptr',textLayout, 'float', i, 'double',NumGet(range, 0, 'double'))
+			}
+			for v in layout.format.underline {
+				i := v[1]
+				range := Buffer(16), NumPut('uint', v[2], range, 0), NumPut('uint', v[3] = -1 ? len : v[3], range, 4)
+				DllCall(this.vTable(textLayout,27+9),'ptr',textLayout, 'uint', i, 'double',NumGet(range, 0, 'double'))
+			}
+			for v in layout.format.strike {
+				i := v[1]
+				range := Buffer(16), NumPut('uint', v[2], range, 0), NumPut('uint', v[3] = -1 ? len : v[3], range, 4)
+				DllCall(this.vTable(textLayout,27+10),'ptr',textLayout, 'uint', i, 'double',NumGet(range, 0, 'double'))
+			}
+		}
+
+		; other getter functions
+	  ; DllCall(this.vTable(textLayout,27+15), 'ptr', textLayout) ; get width
+	  ; DllCall(this.vTable(textLayout,27+16), 'ptr', textLayout) ; get height
+		; DllCall(this.vTable(textLayout,27+20), 'ptr', textLayout,'uint', 1, 'ptr*', &wei:=0, 'ptr*', 0) ; get weight
+		; DllCall(this.vTable(textLayout,27+21), 'ptr', textLayout,'uint', 1, 'ptr*', &sty:=0, 'ptr*', 0) ; get style
+
+		point := Buffer(8), NumPut('float', x, point, 0), NumPut('float', y, point, 4)
+	  DllCall(this._DrawTextLayout,"ptr",this.renderTarget,'double', NumGet(point, 0, 'double'),"ptr", textLayout, 'ptr', this.brush)
 	}
 	
 	
@@ -1023,13 +1115,55 @@ class ShinsOverlayClass {
 		}
 		return this.imageCache[image] := Map("p",bitmap, "w",w, "h",h)
 	}
-	CacheFont(name,size) {
+
+	class TextLayout {
+
+		__New(textFormatOptions) {
+			this.options := textFormatOptions
+			this.format := {
+				underline: [],
+				strike: [],
+				weight: [],
+				style: [],
+				size: []
+			}
+		}
+
+		SetUnderline(enable, x := 1, n := -1) => (this.format.underline.Push([enable, x - 1, n]), this)
+		SetStrikethrough(enable, x := 1, n := -1) => (this.format.strike.Push([enable, x - 1, n]), this)
+		; DWRITE_FONT_STYLE_NORMAL = 0
+		; DWRITE_FONT_STYLE_OBLIQUE = 1
+		; DWRITE_FONT_STYLE_ITALIC = 2
+		SetStyle(style, x := 1, n := -1) => (this.format.style.Push([style, x - 1, n]), this)
+		; DWRITE_FONT_WEIGHT_THIN = 100
+		; DWRITE_FONT_WEIGHT_EXTRA_LIGHT = 200
+		; DWRITE_FONT_WEIGHT_ULTRA_LIGHT = 200
+		; DWRITE_FONT_WEIGHT_LIGHT = 300
+		; DWRITE_FONT_WEIGHT_SEMI_LIGHT = 350
+		; DWRITE_FONT_WEIGHT_NORMAL = 400
+		; DWRITE_FONT_WEIGHT_REGULAR = 400
+		; DWRITE_FONT_WEIGHT_MEDIUM = 500
+		; DWRITE_FONT_WEIGHT_DEMI_BOLD = 600
+		; DWRITE_FONT_WEIGHT_SEMI_BOLD = 600
+		; DWRITE_FONT_WEIGHT_BOLD = 700
+		; DWRITE_FONT_WEIGHT_EXTRA_BOLD = 800
+		; DWRITE_FONT_WEIGHT_ULTRA_BOLD = 800
+		; DWRITE_FONT_WEIGHT_BLACK = 900
+		; DWRITE_FONT_WEIGHT_HEAVY = 900
+		; DWRITE_FONT_WEIGHT_EXTRA_BLACK = 950
+		; DWRITE_FONT_WEIGHT_ULTRA_BLACK = 950
+		SetWeight(weight, x := 1, n := -1) => (this.format.weight.Push([weight, x - 1, n]), this)
+		SetSize(size, x := 1, n := -1) => (this.format.size.Push([size, x - 1, n]), this)
+	}
+	
+	CacheFont(name,size,weight,style,cacheKey) {
 		local textFormat := 0
-		if (DllCall(this.vTable(this.wFactory,15),"ptr",this.wFactory,"wstr",name,"ptr",0,"uint",400,"uint",0,"uint",5,"float",size,"wstr","en-us","Ptr*",&textFormat) != 0) {
+		; https://learn.microsoft.com/en-us/windows/win32/api/dwrite/nf-dwrite-idwritefactory-createtextformat
+		if (DllCall(this.vTable(this.wFactory,15),"ptr",this.wFactory,"wstr",name,"ptr",0,"uint",weight,"uint",style,"uint",5,"float",size,"wstr","en-us","Ptr*",&textFormat) != 0) {
 			this.Err("Unable to create font: " name " (size: " size ")","Try a different font or check to see if " name " is a valid font!")
 			return 0
 		}
-		return this.fonts[name size] := textFormat
+		return this.fonts[cacheKey] := textFormat
 	}
 	__Delete() {
 		DllCall("gdiplus\GdiplusShutdown", "Ptr*", this.gdiplusToken)
@@ -1056,6 +1190,7 @@ class ShinsOverlayClass {
 	}
 	InitFuncs() {
 		this._DrawText := this.vTable(this.renderTarget,27)
+		this._DrawTextLayout := this.vTable(this.renderTarget,28)
 		this._BeginDraw := this.vTable(this.renderTarget,48)
 		this._Clear := this.vTable(this.renderTarget,47)
 		this._DrawImage := this.vTable(this.renderTarget,26)
